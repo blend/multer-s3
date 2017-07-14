@@ -2,6 +2,8 @@ var crypto = require('crypto')
 var stream = require('stream')
 var fileType = require('file-type')
 var parallel = require('run-parallel')
+var dompurify = require('dompurify')
+var { JSDOM } = require('jsdom')
 
 function staticValue (value) {
   return function (req, file, cb) {
@@ -146,11 +148,47 @@ function S3Storage (opts) {
   }
 }
 
+function sanitizeSVG(unsanitizedSVG) {
+  var sanitizer = dompurify((new JSDOM('')).window)
+  sanitizer.addHook('afterSanitizeAttributes', function(node) {
+    if (node.hasAttribute('xlink:href') && !node.getAttribute('xlink:href').match(/^#/)) {
+      node.remove()
+    }
+  })
+  var sanitizerOpts = { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['use'] }
+  return Buffer.from(sanitizer.sanitize(unsanitizedSVG, sanitizerOpts))
+}
+
+function initializeUploadEvents(upload, opts, cb) {
+  upload.on('httpUploadProgress', function (ev) {
+    if (ev.total) currentSize = ev.total
+  })
+
+  upload.send(function (err, result) {
+    if (err) return cb(err)
+
+    cb(null, {
+      size: currentSize,
+      bucket: opts.bucket,
+      key: opts.key,
+      acl: opts.acl,
+      contentType: opts.contentType,
+      contentDisposition: opts.contentDisposition,
+      storageClass: opts.storageClass,
+      serverSideEncryption: opts.serverSideEncryption,
+      metadata: opts.metadata,
+      location: result.Location,
+      etag: result.ETag
+    })
+  })
+}
+
 S3Storage.prototype._handleFile = function (req, file, cb) {
   collect(this, req, file, function (err, opts) {
     if (err) return cb(err)
 
     var currentSize = 0
+    var stream = opts.replacementStream || file.stream
 
     var params = {
       Bucket: opts.bucket,
@@ -161,36 +199,26 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
       Metadata: opts.metadata,
       StorageClass: opts.storageClass,
       ServerSideEncryption: opts.serverSideEncryption,
-      SSEKMSKeyId: opts.sseKmsKeyId,
-      Body: (opts.replacementStream || file.stream)
+      SSEKMSKeyId: opts.sseKmsKeyId
     }
 
     if (opts.contentDisposition) {
       params.ContentDisposition = opts.contentDisposition
     }
 
-    var upload = this.s3.upload(params)
+    if (file.mimetype !== 'image/svg+xml') {
+      params.Body = stream
+      var upload = this.s3.upload(params)
+      return initializeUploadEvents(upload, opts, cb)
+    }
 
-    upload.on('httpUploadProgress', function (ev) {
-      if (ev.total) currentSize = ev.total
-    })
-
-    upload.send(function (err, result) {
-      if (err) return cb(err)
-
-      cb(null, {
-        size: currentSize,
-        bucket: opts.bucket,
-        key: opts.key,
-        acl: opts.acl,
-        contentType: opts.contentType,
-        contentDisposition: opts.contentDisposition,
-        storageClass: opts.storageClass,
-        serverSideEncryption: opts.serverSideEncryption,
-        metadata: opts.metadata,
-        location: result.Location,
-        etag: result.ETag
-      })
+    file.buffer = ''
+    stream.on('data', data => file.buffer += data)
+    stream.on('end', () => {
+      // if the file is an svg, then we sanitize before uploading
+      params.Body = sanitizeSVG(file.buffer)
+      var upload = this.s3.upload(params)
+      return initializeUploadEvents(upload, opts, cb)
     })
   })
 }
