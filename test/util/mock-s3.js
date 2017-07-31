@@ -5,8 +5,6 @@ function createMockS3 () {
   function upload (opts) {
     var ee = new events.EventEmitter()
 
-    console.log(Buffer.isBuffer(opts.Body))
-
     ee.send = function send (cb) {
       if (Buffer.isBuffer(opts.Body)) {
         ee.emit('httpUploadProgress', { total: opts.Body.length })
