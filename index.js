@@ -4,6 +4,7 @@ var fileType = require('file-type')
 var parallel = require('run-parallel')
 var dompurify = require('dompurify')
 var { JSDOM } = require('jsdom')
+var streamToArray = require('stream-to-array')
 
 function staticValue (value) {
   return function (req, file, cb) {
@@ -20,6 +21,7 @@ var defaultContentDisposition = staticValue(null)
 var defaultStorageClass = staticValue('STANDARD')
 var defaultSSE = staticValue(null)
 var defaultSSEKMS = staticValue(null)
+var currentSize = 0
 
 function defaultKey (req, file, cb) {
   crypto.randomBytes(16, function (err, raw) {
@@ -148,9 +150,9 @@ function S3Storage (opts) {
   }
 }
 
-function sanitizeSVG(unsanitizedSVG) {
+function sanitizeSVG (unsanitizedSVG) {
   var sanitizer = dompurify((new JSDOM('')).window)
-  sanitizer.addHook('afterSanitizeAttributes', function(node) {
+  sanitizer.addHook('afterSanitizeAttributes', function (node) {
     if (node.hasAttribute('xlink:href') && !node.getAttribute('xlink:href').match(/^#/)) {
       node.remove()
     }
@@ -159,7 +161,7 @@ function sanitizeSVG(unsanitizedSVG) {
   return Buffer.from(sanitizer.sanitize(unsanitizedSVG, sanitizerOpts))
 }
 
-function initializeUploadEvents(upload, opts, cb) {
+function initializeUploadEvents (upload, opts, cb) {
   upload.on('httpUploadProgress', function (ev) {
     if (ev.total) currentSize = ev.total
   })
@@ -186,8 +188,6 @@ function initializeUploadEvents(upload, opts, cb) {
 S3Storage.prototype._handleFile = function (req, file, cb) {
   collect(this, req, file, function (err, opts) {
     if (err) return cb(err)
-
-    var currentSize = 0
     var stream = opts.replacementStream || file.stream
 
     var params = {
@@ -212,11 +212,10 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
       return initializeUploadEvents(upload, opts, cb)
     }
 
-    file.buffer = ''
-    stream.on('data', data => file.buffer += data)
-    stream.on('end', () => {
-      // if the file is an svg, then we sanitize before uploading
-      params.Body = sanitizeSVG(file.buffer)
+    streamToArray(stream, (err, res) => {
+      if (err) return cb(err)
+      var buffers = res.map(part => (part instanceof Buffer) ? part : new Buffer(part))
+      params.Body = sanitizeSVG(Buffer.concat(buffers))
       var upload = this.s3.upload(params)
       return initializeUploadEvents(upload, opts, cb)
     })
