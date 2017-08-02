@@ -218,12 +218,12 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
     stream.on('data', data => {
       fileSize += data.length
       if (fileSize > MAX_FILE_SIZE) {
-        stream.emit('error', new Error('Filesize exceeded limit'));
+        stream.emit('error', new Error('Filesize exceeded limit'))
       }
       streamAsString += data
     })
     stream.on('error', err => {
-      cb(err);
+      cb(err)
     })
     stream.on('close', () => {
       params.Body = sanitizeSVG(Buffer.from(streamAsString))
