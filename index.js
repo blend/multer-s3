@@ -4,7 +4,6 @@ var fileType = require('file-type')
 var parallel = require('run-parallel')
 var dompurify = require('dompurify')
 var { JSDOM } = require('jsdom')
-var streamToArray = require('stream-to-array')
 
 function staticValue (value) {
   return function (req, file, cb) {
@@ -212,10 +211,27 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
       return initializeUploadEvents(upload, opts, cb)
     }
 
-    streamToArray(stream, (err, res) => {
-      if (err) return cb(err)
-      var buffers = res.map(part => (part instanceof Buffer) ? part : new Buffer(part))
-      params.Body = sanitizeSVG(Buffer.concat(buffers))
+    var streamAsString = ''
+    var fileSize = 0
+    const MAX_FILE_SIZE = 1000000000000
+
+    stream.on('data', data => {
+      fileSize += data.length
+      if (fileSize > MAX_FILE_SIZE) {
+        stream.emit('error', new Error('Filesize exceeded limit'));
+      }
+      streamAsString += data
+    })
+    stream.on('error', err => {
+      cb(err);
+    })
+    stream.on('close', () => {
+      params.Body = sanitizeSVG(Buffer.from(streamAsString))
+      var upload = this.s3.upload(params)
+      return initializeUploadEvents(upload, opts, cb)
+    })
+    stream.on('end', () => {
+      params.Body = sanitizeSVG(Buffer.from(streamAsString))
       var upload = this.s3.upload(params)
       return initializeUploadEvents(upload, opts, cb)
     })
