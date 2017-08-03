@@ -21,7 +21,6 @@ var defaultContentDisposition = staticValue(null)
 var defaultStorageClass = staticValue('STANDARD')
 var defaultSSE = staticValue(null)
 var defaultSSEKMS = staticValue(null)
-var currentSize = 0
 
 function defaultKey (req, file, cb) {
   crypto.randomBytes(16, function (err, raw) {
@@ -149,8 +148,8 @@ function S3Storage (opts) {
     default: throw new TypeError('Expected opts.sseKmsKeyId to be undefined, string, or function')
   }
 
-  if (opts.fileSizeLimit) {
-    this.fileSizeLimit = opts.fileSizeLimit
+  if (opts.svgFileSizeLimit) {
+    this.svgFileSizeLimit = opts.svgFileSizeLimit
   }
 }
 
@@ -165,34 +164,12 @@ function sanitizeSVG (unsanitizedSVG) {
   return Buffer.from(sanitizer.sanitize(unsanitizedSVG, sanitizerOpts))
 }
 
-function initializeUploadEvents (upload, opts, cb) {
-  upload.on('httpUploadProgress', function (ev) {
-    if (ev.total) currentSize = ev.total
-  })
-
-  upload.send(function (err, result) {
-    if (err) return cb(err)
-
-    cb(null, {
-      size: currentSize,
-      bucket: opts.bucket,
-      key: opts.key,
-      acl: opts.acl,
-      contentType: opts.contentType,
-      contentDisposition: opts.contentDisposition,
-      storageClass: opts.storageClass,
-      serverSideEncryption: opts.serverSideEncryption,
-      metadata: opts.metadata,
-      location: result.Location,
-      etag: result.ETag
-    })
-  })
-}
-
 S3Storage.prototype._handleFile = function (req, file, cb) {
   collect(this, req, file, function (err, opts) {
     if (err) return cb(err)
     var stream = opts.replacementStream || file.stream
+
+    var currentSize = 0
 
     var params = {
       Bucket: opts.bucket,
@@ -210,13 +187,37 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
       params.ContentDisposition = opts.contentDisposition
     }
 
+    function initializeUploadEvents (upload, opts, cb) {
+      upload.on('httpUploadProgress', function (ev) {
+        if (ev.total) currentSize = ev.total
+      })
+
+      upload.send(function (err, result) {
+        if (err) return cb(err)
+
+        cb(null, {
+          size: currentSize,
+          bucket: opts.bucket,
+          key: opts.key,
+          acl: opts.acl,
+          contentType: opts.contentType,
+          contentDisposition: opts.contentDisposition,
+          storageClass: opts.storageClass,
+          serverSideEncryption: opts.serverSideEncryption,
+          metadata: opts.metadata,
+          location: result.Location,
+          etag: result.ETag
+        })
+      })
+    }
+
     if (file.mimetype !== 'image/svg+xml') {
       params.Body = stream
       var upload = this.s3.upload(params)
       return initializeUploadEvents(upload, opts, cb)
     }
 
-    rawBody(stream, { limit: this.fileSizeLimit }, (err, string) => {
+    rawBody(stream, { limit: this.svgFileSizeLimit }, (err, string) => {
       if (err) return cb(err)
       params.Body = sanitizeSVG(Buffer.from(string))
       var upload = this.s3.upload(params)
