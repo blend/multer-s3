@@ -4,6 +4,7 @@ var fileType = require('file-type')
 var parallel = require('run-parallel')
 var dompurify = require('dompurify')
 var { JSDOM } = require('jsdom')
+var rawBody = require('raw-body')
 
 function staticValue (value) {
   return function (req, file, cb) {
@@ -20,7 +21,6 @@ var defaultContentDisposition = staticValue(null)
 var defaultStorageClass = staticValue('STANDARD')
 var defaultSSE = staticValue(null)
 var defaultSSEKMS = staticValue(null)
-var currentSize = 0
 
 function defaultKey (req, file, cb) {
   crypto.randomBytes(16, function (err, raw) {
@@ -147,6 +147,10 @@ function S3Storage (opts) {
     case 'undefined': this.getSSEKMS = defaultSSEKMS; break
     default: throw new TypeError('Expected opts.sseKmsKeyId to be undefined, string, or function')
   }
+
+  if (opts.fileSizeLimit) {
+    this.fileSizeLimit = opts.fileSizeLimit
+  }
 }
 
 function sanitizeSVG (unsanitizedSVG) {
@@ -189,6 +193,8 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
     if (err) return cb(err)
     var stream = opts.replacementStream || file.stream
 
+    var currentSize = 0
+
     var params = {
       Bucket: opts.bucket,
       Key: opts.key,
@@ -211,27 +217,9 @@ S3Storage.prototype._handleFile = function (req, file, cb) {
       return initializeUploadEvents(upload, opts, cb)
     }
 
-    var streamAsString = ''
-    var fileSize = 0
-    const MAX_FILE_SIZE = 1000000000000
-
-    stream.on('data', data => {
-      fileSize += data.length
-      if (fileSize > MAX_FILE_SIZE) {
-        stream.emit('error', new Error('Filesize exceeded limit'))
-      }
-      streamAsString += data
-    })
-    stream.on('error', err => {
-      cb(err)
-    })
-    stream.on('close', () => {
-      params.Body = sanitizeSVG(Buffer.from(streamAsString))
-      var upload = this.s3.upload(params)
-      return initializeUploadEvents(upload, opts, cb)
-    })
-    stream.on('end', () => {
-      params.Body = sanitizeSVG(Buffer.from(streamAsString))
+    rawBody(stream, { limit: this.fileSizeLimit }, (err, string) => {
+      if (err) return cb(err)
+      params.Body = sanitizeSVG(Buffer.from(string))
       var upload = this.s3.upload(params)
       return initializeUploadEvents(upload, opts, cb)
     })
