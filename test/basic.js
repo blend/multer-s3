@@ -143,4 +143,51 @@ describe('Multer S3', function () {
       done()
     })
   })
+
+  it('sanitizes SVGs with XSS threats', function (done) {
+    var s3 = mockS3()
+    var form = new FormData()
+    var storage = multerS3({ s3: s3, bucket: 'test', serverSideEncryption: 'aws:kms' })
+    var upload = multer({ storage: storage })
+    var parser = upload.single('image')
+    var image = fs.createReadStream(path.join(__dirname, 'files', 'xss-test.svg'))
+
+    form.append('name', 'Multer')
+    form.append('image', image)
+
+    submitForm(parser, form, function (err, req) {
+      assert.ifError(err)
+
+      assert.equal(req.body.name, 'Multer')
+
+      assert.equal(req.file.fieldname, 'image')
+      assert.equal(req.file.originalname, 'xss-test.svg')
+      // If the file was not sanitized properly, the filesize will change
+      assert.equal(req.file.size, 211)
+      assert.equal(req.file.bucket, 'test')
+      assert.equal(req.file.etag, 'mock-etag')
+      assert.equal(req.file.location, 'mock-location')
+      assert.equal(req.file.serverSideEncryption, 'aws:kms')
+
+      done()
+    })
+  })
+
+  it('throws an error when an uploaded svg is above the filesize limit', function (done) {
+    var s3 = mockS3()
+    var form = new FormData()
+    var storage = multerS3({ s3: s3, bucket: 'test', serverSideEncryption: 'aws:kms', svgFileSizeLimit: 1 })
+    var upload = multer({ storage: storage })
+    var parser = upload.single('image')
+    var image = fs.createReadStream(path.join(__dirname, 'files', 'xss-test.svg'))
+
+    form.append('name', 'Multer')
+    form.append('image', image)
+
+    submitForm(parser, form, function (err, req) {
+      assert.equal(err.type, 'entity.too.large')
+
+      done()
+    })
+  })
 })
