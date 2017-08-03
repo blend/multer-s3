@@ -172,4 +172,22 @@ describe('Multer S3', function () {
       done()
     })
   })
+
+  it('throws an error when an uploaded svg is above the filesize limit', function (done) {
+    var s3 = mockS3()
+    var form = new FormData()
+    var storage = multerS3({ s3: s3, bucket: 'test', serverSideEncryption: 'aws:kms', fileSizeLimit: 1 })
+    var upload = multer({ storage: storage })
+    var parser = upload.single('image')
+    var image = fs.createReadStream(path.join(__dirname, 'files', 'xss-test.svg'))
+
+    form.append('name', 'Multer')
+    form.append('image', image)
+
+    submitForm(parser, form, function (err, req) {
+      assert.equal(err.type, 'entity.too.large')
+
+      done()
+    })
+  })
 })
